@@ -32,9 +32,12 @@ class TestBaseBreakTrxnsWireSlctn(unittest.TestCase):
         wire_selection.get_rpt_wire_trxns = MagicMock(return_value=mock_df)
         wire_selection.get_wire_trxns_for_all_accts = MagicMock(return_value=mock_df)
         
-        # Execute the method under test
-        wire_selection.generate(datetime.now())
-        
+        # Adjust the test to pass a date string in the required format
+        run_date_str = datetime.now().strftime('%Y-%m-%d')
+
+        # Execute the method under test with the correctly formatted date string
+        wire_selection.generate(run_date_str)
+
         # Assert that external dependencies are called as expected
         mock_get_date_list.assert_called_once()
         mock_write_parquet_to_s3.assert_called_once()
