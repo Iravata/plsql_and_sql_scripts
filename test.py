@@ -1,50 +1,46 @@
 import unittest
 from unittest.mock import patch, MagicMock
+from pyspark.sql import DataFrame
 from datetime import datetime
-from your_module import BaseBreakTrxnsSuspectCashSlctn  # Adjust the import statement based on your project structure
+# Adjust the import path according to your project structure
+from AA_LTR.src.build.base_break_trxns_wire_slctn import BaseBreakTrxnsWireSlctn
 
-class TestBaseBreakTrxnsSuspectCashSlctn(unittest.TestCase):
-
-    @patch('your_module.Config')
-    @patch('your_module.getSpark')
-    @patch('your_module.SQLContext')
-    @patch('your_module.get_date_list')
-    @patch('your_module.write_parquet_to_s3')
-    def test_generate(self, mock_write_parquet_to_s3, mock_get_date_list, mock_SQLContext, mock_getSpark, mock_Config):
-        # Mock configurations and return values
-        mock_Config.return_value.LOGLOOKBACK_16 = 16
-        mock_Config.return_value.REPO_DATA_DIR = '/path/to/data'
+class TestBaseBreakTrxnsWireSlctn(unittest.TestCase):
+    @patch('AA_LTR.src.build.utils.common.get_date_list')
+    @patch('AA_LTR.src.build.utils.common.write_parquet_to_s3')
+    @patch('AA_LTR.src.build.config.Config')
+    @patch('AA_LTR.src.build.utils.dataset_loader.getSpark')
+    def test_generate(self, mock_getSpark, mock_Config, mock_write_parquet_to_s3, mock_get_date_list):
+        # Setup mock return values
+        mock_Config.return_value.LOOKBACK_7 = 7
+        mock_Config.return_value.REPO_DATA_DIR = '/fake/path/to/data'
+        mock_get_date_list.return_value = ['2021-01-01']
         
-        mock_get_date_list.return_value = ['2021-01-01', '2021-01-02']  # Example return value
-        mock_spark_instance = MagicMock()
-        mock_getSpark.return_value = mock_spark_instance
-        mock_SQLContext.return_value = MagicMock()
-        # Mock Spark DataFrame
+        mock_spark_session = MagicMock()
+        mock_getSpark.return_value = mock_spark_session
+        mock_spark_session.sql.return_value = MagicMock(spec=DataFrame)
+        
         mock_df = MagicMock(spec=DataFrame)
-
-        # Adjust the mock for SQLContext to return a mock DataFrame upon read
-        mock_SQLContext.return_value.read.format.return_value.option.return_value.load.return_value = mock_df
-
-
-        # Initialize the class
-        processor = BaseBreakTrxnsSuspectCashSlctn()
-
-        # Mock methods within the class
-        processor.get_break_selection_accounts = MagicMock()
-        processor.get_suspected_cash_trxnss = MagicMock()
-        processor.get_suspected_cash_trxns_for_all_accts = MagicMock(return_value=MagicMock())
-
-        run_date = datetime.now()
-
-        # Call the generate method
-        processor.generate(run_date)
-
-        # Assertions to verify the external calls were made as expected
-        mock_get_date_list.assert_called_once_with(run_date, 16, 'N')
+        # Mocking the DataFrame operations
+        mock_spark_session.read.format.return_value.option.return_value.load.return_value = mock_df
+        
+        # Instantiate the class to be tested
+        wire_selection = BaseBreakTrxnsWireSlctn()
+        
+        # Mocking internal methods to bypass actual implementation
+        wire_selection.get_break_selection_accts = MagicMock(return_value=mock_df)
+        wire_selection.get_rpt_wire_trxns = MagicMock(return_value=mock_df)
+        wire_selection.get_wire_trxns_for_all_accts = MagicMock(return_value=mock_df)
+        
+        # Execute the method under test
+        wire_selection.generate(datetime.now())
+        
+        # Assert that external dependencies are called as expected
+        mock_get_date_list.assert_called_once()
         mock_write_parquet_to_s3.assert_called_once()
-        processor.get_break_selection_accounts.assert_called_once()
-        processor.get_suspected_cash_trxnss.assert_called_once()
-        processor.get_suspected_cash_trxns_for_all_accts.assert_called_once()
+        wire_selection.get_break_selection_accts.assert_called_once()
+        wire_selection.get_rpt_wire_trxns.assert_called_once()
+        wire_selection.get_wire_trxns_for_all_accts.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()
