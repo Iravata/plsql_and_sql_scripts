@@ -19,6 +19,12 @@ class TestBaseBreakTrxnsSuspectCashSlctn(unittest.TestCase):
         mock_spark_instance = MagicMock()
         mock_getSpark.return_value = mock_spark_instance
         mock_SQLContext.return_value = MagicMock()
+        # Mock Spark DataFrame
+        mock_df = MagicMock(spec=DataFrame)
+
+        # Adjust the mock for SQLContext to return a mock DataFrame upon read
+        mock_SQLContext.return_value.read.format.return_value.option.return_value.load.return_value = mock_df
+
 
         # Initialize the class
         processor = BaseBreakTrxnsSuspectCashSlctn()
