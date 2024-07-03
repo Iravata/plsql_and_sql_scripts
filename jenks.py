@@ -47,6 +47,24 @@ spark.stop()
 
 ---
 
+from pyspark.sql.functions import pandas_udf, PandasUDFType
+from pyspark.sql.types import DoubleType
+import pandas as pd
+
+@pandas_udf(DoubleType(), PandasUDFType.SCALAR)
+def predict_proba_pandas_udf(*cols):
+    # Combine input columns into a single DataFrame
+    X = pd.concat(cols, axis=1)
+    
+    # Make predictions directly on the DataFrame
+    # Assuming xgb_model is a scikit-learn compatible XGBoost model
+    probabilities = xgb_model.predict_proba(X)[:, 1]  # Probability of positive class
+    
+    return pd.Series(probabilities)
+
+# Apply the pandas_udf to perform predictions
+result_df = df.select(*feature_cols).select(predict_proba_pandas_udf(*feature_cols).alias("probability_positive_class"), "*")
+
 spark = SparkSession.builder \
     .appName("XGBoost Inference") \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
