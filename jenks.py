@@ -1,28 +1,60 @@
-import numpy as np
-import math
-import jenkspy
-from scipy.stats import percentileofscore
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import pandas_udf, PandasUDFType
+from pyspark.sql.types import DoubleType
+import xgboost as xgb
+import pickle
+import pandas as pd
 
-def get_natural_breaks(col_values, run_type) -> dict:
-    nb_partition = get_natural_break_partition(run_type)
-    natural_break_map = {}
+# Initialize Spark session
+spark = SparkSession.builder \
+    .appName("XGBoost Inference") \
+    .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
+    .getOrCreate()
 
-    # Check if all values in col_values are the same
-    unique_values = np.unique(col_values)
-    if len(unique_values) == 1:
-        # All values are the same, create a natural break map with 100% percentile
-        # Since there is only one class, the break value is the unique value itself
-        natural_break_map = {100.0: unique_values[0]}
-    elif col_values.size > nb_partition + 1:
-        if col_values.size > MAX_RECORDS_NATURAL_BREAK:
-            size = math.floor(col_values.size * (MAX_RECORDS_NATURAL_BREAK / col_values.size))
-            sample = np.random.choice(col_values, size=size)
-            jenks_cut = jenkspy.jenks_breaks(sample, n_classes=nb_partition)
-        else:
-            jenks_cut = jenkspy.jenks_breaks(col_values, n_classes=nb_partition)
-        
-        percentiles = [percentileofscore(col_values, jbreak) for jbreak in jenks_cut]
-        formatted_percentiles = list(np.around(np.array(percentiles), 2))
-        natural_break_map = dict(zip(formatted_percentiles, jenks_cut))
+# Read the input CSV file from S3
+input_path = "s3://your-bucket/input-data.csv"
+df = spark.read.csv(input_path, header=True, inferSchema=True)
+
+# Load the XGBoost model
+with open("model.pkl", "rb") as model_file:
+    xgb_model = pickle.load(model_file)
+
+# Define the feature columns
+feature_cols = ["feature1", "feature2", "feature3", ...]
+
+# Define a pandas_udf for prediction
+@pandas_udf(DoubleType(), PandasUDFType.SCALAR)
+def predict_pandas_udf(*cols):
+    # Combine input columns into a single DataFrame
+    X = pd.concat(cols, axis=1)
     
-    return natural_break_map
+    # Create DMatrix
+    dmatrix = xgb.DMatrix(X)
+    
+    # Make predictions
+    return pd.Series(xgb_model.predict(dmatrix))
+
+# Apply the pandas_udf to perform predictions
+result_df = df.select(*feature_cols).select(predict_pandas_udf(*feature_cols).alias("prediction"), "*")
+
+# Write the results back to S3
+output_path = "s3://your-bucket/output-data"
+result_df.write.csv(output_path, header=True, mode="overwrite")
+
+# Stop the Spark session
+spark.stop()
+
+
+---
+
+spark = SparkSession.builder \
+    .appName("XGBoost Inference") \
+    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+    .config("spark.hadoop.fs.s3a.fast.upload", "true") \
+    .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
+    .config("spark.hadoop.fs.s3a.multipart.threshold", "104857600") \
+    .config("spark.sql.files.maxPartitionBytes", "134217728") \
+    .config("spark.sql.files.openCostInBytes", "134217728") \
+    .config("spark.hadoop.fs.s3a.connection.maximum", "100") \
+    .config("spark.hadoop.fs.s3a.experimental.input.fadvise", "sequential") \
+    .getOrCreate()
