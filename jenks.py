@@ -1,78 +1,79 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import pandas_udf, PandasUDFType
-from pyspark.sql.types import DoubleType
-import xgboost as xgb
-import pickle
-import pandas as pd
+from pyspark.sql.functions import col, when, lit, concat_ws
+from pyspark.sql.types import StringType
+import io
 
-# Initialize Spark session
+# Initialize Spark Session
 spark = SparkSession.builder \
-    .appName("XGBoost Inference") \
-    .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
+    .appName("Feature Comparison") \
     .getOrCreate()
 
-# Read the input CSV file from S3
-input_path = "s3://your-bucket/input-data.csv"
-df = spark.read.csv(input_path, header=True, inferSchema=True)
+# Function to read parquet files from S3
+def read_parquet(path):
+    return spark.read.parquet(path)
 
-# Load the XGBoost model
-with open("model.pkl", "rb") as model_file:
-    xgb_model = pickle.load(model_file)
+# Paths to your parquet files
+original_path = "s3://your-bucket/original-features/"
+new_path = "s3://your-bucket/new-features/"
 
-# Define the feature columns
-feature_cols = ["feature1", "feature2", "feature3", ...]
+# S3 path for the output CSV report
+output_path = "s3://your-output-bucket/reports/feature_comparison_report.csv"
 
-# Define a pandas_udf for prediction
-@pandas_udf(DoubleType(), PandasUDFType.SCALAR)
-def predict_pandas_udf(*cols):
-    # Combine input columns into a single DataFrame
-    X = pd.concat(cols, axis=1)
+# Read both datasets
+df_original = read_parquet(original_path)
+df_new = read_parquet(new_path)
+
+# Ensure both dataframes have the same columns
+common_columns = sorted(set(df_original.columns) & set(df_new.columns))
+df_original = df_original.select(*common_columns)
+df_new = df_new.select(*common_columns)
+
+# Function to compare dataframes
+def compare_dataframes(df1, df2):
+    # Combine dataframes
+    df_combined = df1.alias("df1").join(df2.alias("df2"), on=df1.columns, how="full_outer")
     
-    # Create DMatrix
-    dmatrix = xgb.DMatrix(X)
+    # Create comparison columns
+    for col_name in df1.columns:
+        df_combined = df_combined.withColumn(
+            f"{col_name}_diff",
+            when(col(f"df1.{col_name}") != col(f"df2.{col_name}"), lit(True)).otherwise(lit(False))
+        )
     
-    # Make predictions
-    return pd.Series(xgb_model.predict(dmatrix))
+    return df_combined
 
-# Apply the pandas_udf to perform predictions
-result_df = df.select(*feature_cols).select(predict_pandas_udf(*feature_cols).alias("prediction"), "*")
+# Perform comparison
+df_compared = compare_dataframes(df_original, df_new)
 
-# Write the results back to S3
-output_path = "s3://your-bucket/output-data"
-result_df.write.csv(output_path, header=True, mode="overwrite")
+# Create a dataframe with differences
+diff_columns = []
+for col_name in common_columns:
+    diff_columns.extend([
+        col(f"df1.{col_name}").alias(f"{col_name}_original"),
+        col(f"df2.{col_name}").alias(f"{col_name}_new"),
+        col(f"{col_name}_diff").alias(f"{col_name}_is_different")
+    ])
 
-# Stop the Spark session
+df_differences = df_compared.select(*diff_columns) \
+    .filter(" OR ".join([f"{col}_is_different" for col in common_columns]))
+
+# Add a column with all differences as a string
+def create_diff_string(row):
+    diffs = []
+    for col in common_columns:
+        if row[f"{col}_is_different"]:
+            diffs.append(f"{col}: {row[f'{col}_original']} -> {row[f'{col}_new']}")
+    return ", ".join(diffs)
+
+create_diff_string_udf = spark.udf.register("create_diff_string", create_diff_string, StringType())
+
+df_report = df_differences.withColumn("differences", create_diff_string_udf(struct(*df_differences.columns))) \
+    .select("differences")
+
+# Write the report to S3 as CSV
+df_report.write.csv(output_path, header=True, mode="overwrite")
+
+print(f"Comparison complete. Report saved to {output_path}")
+
+# Stop Spark session
 spark.stop()
-
-
----
-
-from pyspark.sql.functions import pandas_udf, PandasUDFType
-from pyspark.sql.types import DoubleType
-import pandas as pd
-
-@pandas_udf(DoubleType(), PandasUDFType.SCALAR)
-def predict_proba_pandas_udf(*cols):
-    # Combine input columns into a single DataFrame
-    X = pd.concat(cols, axis=1)
-    
-    # Make predictions directly on the DataFrame
-    # Assuming xgb_model is a scikit-learn compatible XGBoost model
-    probabilities = xgb_model.predict_proba(X)[:, 1]  # Probability of positive class
-    
-    return pd.Series(probabilities)
-
-# Apply the pandas_udf to perform predictions
-result_df = df.select(*feature_cols).select(predict_proba_pandas_udf(*feature_cols).alias("probability_positive_class"), "*")
-
-spark = SparkSession.builder \
-    .appName("XGBoost Inference") \
-    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-    .config("spark.hadoop.fs.s3a.fast.upload", "true") \
-    .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
-    .config("spark.hadoop.fs.s3a.multipart.threshold", "104857600") \
-    .config("spark.sql.files.maxPartitionBytes", "134217728") \
-    .config("spark.sql.files.openCostInBytes", "134217728") \
-    .config("spark.hadoop.fs.s3a.connection.maximum", "100") \
-    .config("spark.hadoop.fs.s3a.experimental.input.fadvise", "sequential") \
-    .getOrCreate()
