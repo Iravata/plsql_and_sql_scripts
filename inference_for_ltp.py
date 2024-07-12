@@ -116,6 +116,16 @@ def main(input_path, output_path, model_path, run_dt):
     result_df = df.select(*feature_cols).select(
         predict_and_transform_wrapper(*feature_cols).alias("prediction")
     ).select("prediction.*")
+
+    # Calculate the BIN and other columns
+    result_df = result_df.withColumn("BIN", calc_group_bin(F.col("prediction")))
+    result_df = result_df.withColumn("PRCSNG_DT", F.lit(run_dt))
+    result_df = result_df.withColumn("SCNRO_ID", F.lit('71621'))
+    result_df = result_df.withColumn("CUST_ID", F.lit(''))  # Adjust as needed
+    result_df = result_df.withColumn("AA_NODE_PATH_ATTR_CHAR", F.lit(''))  # Adjust as needed
+    result_df = result_df.withColumn("CLASS_ID", F.lit(''))  # Adjust as needed
+    result_df = result_df.withColumn("DECISION_PATH_FEATURE_LIST", F.lit(''))  # Adjust as needed
+
     
     # Write the results back to S3
     result_df.write.csv(output_path, header=True, mode="overwrite", sep="~")
