@@ -108,9 +108,13 @@ def main(input_path, output_path, model_path, run_dt):
     # Get feature names from the model
     feature_cols = xgb_model.get_booster().feature_names
     
+    # Create a closure that captures xgb_model and run_dt
+    def predict_and_transform_wrapper(*cols):
+        return predict_and_transform(xgb_model, run_dt)(*cols)
+    
     # Apply the pandas_udf to perform predictions and transformations
     result_df = df.select(*feature_cols).select(
-        predict_and_transform(xgb_model, run_dt)(*feature_cols).alias("prediction")
+        predict_and_transform_wrapper(*feature_cols).alias("prediction")
     ).select("prediction.*")
     
     # Write the results back to S3
