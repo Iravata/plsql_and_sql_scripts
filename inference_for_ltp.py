@@ -59,44 +59,26 @@ def get_decision_path():
 def calc_group_bin(df):
     dp_df = pd.DataFrame(get_decision_path())
     for i in range(len(dp_df)):
-        df.loc[(df["PREDICTED_PROBA"] >= dp_df.loc[i, "LOW_P"]) & 
-               (df["PREDICTED_PROBA"] <= dp_df.loc[i, "HIGH_P"]), "BIN"] = i + 1
-    df['DECISION_PATH_FEATURE_LIST'] = ''
+        df = df.withColumn(
+            "BIN",
+            F.when(
+                (col("PREDICTED_PROBA") >= dp_df.loc[i, "LOW_P"]) & 
+                (col("PREDICTED_PROBA") <= dp_df.loc[i, "HIGH_P"]),
+                lit(i + 1)
+            ).otherwise(col("BIN"))
+        )
     return df
 
-@pandas_udf(StructType([
-    StructField("CUST_ID", StringType()),
-    StructField("AA_NODE_PATH_ATTR_CHAR", StringType()),
-    StructField("PREDICTED_PROBA", DoubleType()),
-    StructField("BIN", DoubleType()),
-    StructField("CLASS_ID", StringType()),
-    StructField("PRCSNG_DT", StringType()),
-    StructField("SCNRO_ID", StringType()),
-    StructField("DECISION_PATH_FEATURE_LIST", StringType())
-]))
-def predict_and_transform(model, run_dt):
-    def predict_pandas(*cols):
-        features = pd.concat(cols, axis=1)
-        prediction = model.predict_proba(features)
-        prediction = np.round(prediction, 4)
-        
-        datetimeobject = datetime.strptime(run_dt, '%Y%m%d')
-        new_date = datetimeobject.strftime('%d-%b-%Y')
-        
-        prediction_df = pd.DataFrame({
-            "CUST_ID": features.index,
-            "AA_NODE_PATH_ATTR_CHAR": '',
-            "PREDICTED_PROBA": prediction[:, 1],
-            "BIN": 1,
-            "CLASS_ID": '',
-            "PRCSNG_DT": new_date,
-            "SCNRO_ID": '71621'
-        })
-        
-        output_df = calc_group_bin(prediction_df)
-        return output_df
-    
-    return predict_pandas
+@pandas_udf(DoubleType())
+def predict_proba_pandas_udf(*cols):
+    X = pd.concat(cols, axis=1)
+    if isinstance(broadcast_model.value, xgb.Booster):
+        dmatrix = xgb.DMatrix(X)
+        probabilities = broadcast_model.value.predict(dmatrix)
+    else:
+        # Assuming it's a scikit-learn compatible model
+        probabilities = broadcast_model.value.predict_proba(X)[:, 1]  # Probability of positive class
+    return pd.Series(probabilities)
 
 def main(input_path, output_path, model_path, run_dt):
     # Load the XGBoost model
@@ -113,19 +95,18 @@ def main(input_path, output_path, model_path, run_dt):
         return predict_and_transform(xgb_model, run_dt)(*cols)
     
     # Apply the pandas_udf to perform predictions and transformations
-    result_df = df.select(*feature_cols).select(
-        predict_and_transform_wrapper(*feature_cols).alias("prediction")
-    ).select("prediction.*")
-
+    result_df = df.select(*feature_cols).withColumn(
+        "PREDICTED_PROBA", predict_proba_pandas_udf(*[F.col(c) for c in feature_cols])
+    )
+    
     # Calculate the BIN and other columns
-    result_df = result_df.withColumn("BIN", calc_group_bin(F.col("prediction")))
+    result_df = result_df.withColumn("BIN", calc_group_bin(F.col("PREDICTED_PROBA")))
     result_df = result_df.withColumn("PRCSNG_DT", F.lit(run_dt))
     result_df = result_df.withColumn("SCNRO_ID", F.lit('71621'))
     result_df = result_df.withColumn("CUST_ID", F.lit(''))  # Adjust as needed
     result_df = result_df.withColumn("AA_NODE_PATH_ATTR_CHAR", F.lit(''))  # Adjust as needed
     result_df = result_df.withColumn("CLASS_ID", F.lit(''))  # Adjust as needed
     result_df = result_df.withColumn("DECISION_PATH_FEATURE_LIST", F.lit(''))  # Adjust as needed
-
     
     # Write the results back to S3
     result_df.write.csv(output_path, header=True, mode="overwrite", sep="~")
