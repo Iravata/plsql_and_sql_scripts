@@ -181,3 +181,12 @@ def predict_and_transform(*cols):
     result_df = df.select(*feature_cols).select(
         predict_and_transform(*[col(c) for c in feature_cols]).alias("prediction")
     ).select("prediction.*")
+
+
+    --------
+
+        # Derive class_id based on BIN value
+    df = df.withColumn(
+        "CLASS_ID",
+        F.when(F.col("BIN").isNotNull(), F.concat(F.lit("C"), F.col("BIN").cast("string")))
+    )
