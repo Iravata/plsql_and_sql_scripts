@@ -172,3 +172,12 @@ def predict_and_transform(*cols):
     prediction_df['PRCSNG_DT'] = datetime.strptime(run_dt, '%Y%m%d').strftime('%d-%b-%Y')
     
     return prediction_df
+
+
+    # Get feature names from the model
+    feature_cols = xgb_model.get_booster().feature_names
+    
+    # Apply the pandas_udf to perform predictions and transformations
+    result_df = df.select(*feature_cols).select(
+        predict_and_transform(*[col(c) for c in feature_cols]).alias("prediction")
+    ).select("prediction.*")
