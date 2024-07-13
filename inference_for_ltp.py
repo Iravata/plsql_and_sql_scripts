@@ -127,3 +127,48 @@ if __name__ == '__main__':
     run_dt = sys.argv[4]
     
     main(input_path, output_path, model_path, run_dt)
+
+----------------------
+
+@pandas_udf(StructType([
+    StructField("CUST_ID", StringType()),
+    StructField("AA_NODE_PATH_ATTR_CHAR", StringType()),
+    StructField("PREDICTED_PROBA", DoubleType()),
+    StructField("BIN", DoubleType()),
+    StructField("CLASS_ID", StringType()),
+    StructField("PRCSNG_DT", StringType()),
+    StructField("SCNRO_ID", StringType()),
+    StructField("DECISION_PATH_FEATURE_LIST", StringType())
+]))
+def predict_and_transform(*cols):
+    model = broadcast_model.value
+    X = pd.concat(cols, axis=1)
+    if isinstance(model, xgb.Booster):
+        dmatrix = xgb.DMatrix(X)
+        probabilities = model.predict(dmatrix)
+    else:
+        # Assuming it's a scikit-learn compatible model
+        probabilities = model.predict_proba(X)[:, 1]  # Probability of positive class
+    
+    prediction_df = pd.DataFrame({
+        "CUST_ID": X.index,
+        "AA_NODE_PATH_ATTR_CHAR": '',
+        "PREDICTED_PROBA": probabilities,
+        "BIN": 1,
+        "CLASS_ID": '',
+        "PRCSNG_DT": '',
+        "SCNRO_ID": '71621',
+        "DECISION_PATH_FEATURE_LIST": ''
+    })
+    
+    dp_df = pd.DataFrame(get_decision_path())
+    for i in range(len(dp_df)):
+        prediction_df.loc[
+            (prediction_df["PREDICTED_PROBA"] >= dp_df.loc[i, "LOW_P"]) & 
+            (prediction_df["PREDICTED_PROBA"] <= dp_df.loc[i, "HIGH_P"]), 
+            "BIN"
+        ] = i + 1
+    
+    prediction_df['PRCSNG_DT'] = datetime.strptime(run_dt, '%Y%m%d').strftime('%d-%b-%Y')
+    
+    return prediction_df
