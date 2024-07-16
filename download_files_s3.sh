@@ -31,3 +31,6 @@ echo "Download and renaming completed."
 ---------------
 
 while read -r date; do aws s3 cp s3://your-s3-bucket-name/trusted/na/na/ltr_data/features/$date/feat_final.csv ./feat_final_$date.csv; done < date_paths.txt
+
+
+for /f %d in (date_paths.txt) do @aws s3 cp s3://your-s3-bucket-name/trusted/na/na/ltr_data/features/%d/feat_final.csv feat_final_%d.csv
